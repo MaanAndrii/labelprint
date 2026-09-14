@@ -6,6 +6,13 @@ from reportlab.lib.units import mm
 from reportlab.lib.pagesizes import A4
 from PIL import Image
 
+from label_presets import (
+    CUSTOM_PRESET,
+    DEFAULT_PRESET,
+    LABEL_SIZE_PRESETS,
+    find_matching_preset,
+)
+
 MARGIN_MM = 20  # мінімальні поля 20 мм
 
 class LabelData:
@@ -117,8 +124,7 @@ class LabelApp:
             w_px, h_px = img.size
             orig_w_mm = w_px / dpi[0] * 25.4
             orig_h_mm = h_px / dpi[1] * 25.4
-            initial_width_mm = 50.0
-            initial_height_mm = initial_width_mm * (orig_h_mm / orig_w_mm) if orig_w_mm > 0 else 50.0
+            initial_width_mm, initial_height_mm = LABEL_SIZE_PRESETS[DEFAULT_PRESET]
             label_data = LabelData(filepath=filename, width_mm=initial_width_mm, height_mm=initial_height_mm, count=1, original_ratio=orig_w_mm / orig_h_mm if orig_h_mm > 0 else 1)
             self.labels.append(label_data)
             self.update_listbox()
@@ -162,36 +168,73 @@ class LabelApp:
         pos_x = root_x + (root_w // 2) - (dialog_w // 2)
         pos_y = root_y + (root_h // 2) - (dialog_h // 2)
         config_window.geometry(f"+{pos_x}+{pos_y}")
-        width_var, height_var, count_var = tk.DoubleVar(value=label_data.width_mm), tk.DoubleVar(value=label_data.height_mm), tk.IntVar(value=label_data.count)
-        
-        # --- ПОЧАТОК ЗМІН ---
+        width_var = tk.DoubleVar(value=label_data.width_mm)
+        height_var = tk.DoubleVar(value=label_data.height_mm)
+        count_var = tk.IntVar(value=label_data.count)
+        preset_var = tk.StringVar(
+            value=find_matching_preset(label_data.width_mm, label_data.height_mm)
+        )
+        dimensions_are_updating = False
+
         def sync_from_width(*args):
+            nonlocal dimensions_are_updating
+            if dimensions_are_updating:
+                return
             try:
-                # Заокруглюємо до цілого числа
                 if width_var.get() > 0 and label_data.original_ratio > 0:
+                    dimensions_are_updating = True
                     height_var.set(round(width_var.get() / label_data.original_ratio))
-            except Exception: pass
-        
+                    preset_var.set(CUSTOM_PRESET)
+            except (tk.TclError, ValueError):
+                pass
+            finally:
+                dimensions_are_updating = False
+
         def sync_from_height(*args):
+            nonlocal dimensions_are_updating
+            if dimensions_are_updating:
+                return
             try:
-                # Заокруглюємо до цілого числа
                 if height_var.get() > 0:
+                    dimensions_are_updating = True
                     width_var.set(round(height_var.get() * label_data.original_ratio))
-            except Exception: pass
-        # --- КІНЕЦЬ ЗМІН ---
-        
+                    preset_var.set(CUSTOM_PRESET)
+            except (tk.TclError, ValueError):
+                pass
+            finally:
+                dimensions_are_updating = False
+
+        def apply_preset(event=None):
+            nonlocal dimensions_are_updating
+            dimensions = LABEL_SIZE_PRESETS.get(preset_var.get())
+            if dimensions is None:
+                return
+            dimensions_are_updating = True
+            width_var.set(dimensions[0])
+            height_var.set(dimensions[1])
+            dimensions_are_updating = False
+
+        ttk.Label(config_window, text="Пресет розміру:").grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        preset_combobox = ttk.Combobox(
+            config_window,
+            textvariable=preset_var,
+            values=[CUSTOM_PRESET, *LABEL_SIZE_PRESETS],
+            state="readonly",
+        )
+        preset_combobox.grid(row=0, column=1, sticky="ew", padx=5, pady=5)
+        preset_combobox.bind("<<ComboboxSelected>>", apply_preset)
+
         entry_width = ttk.Entry(config_window, textvariable=width_var)
         entry_height = ttk.Entry(config_window, textvariable=height_var)
-        # Використовуємо більш надійну перевірку фокусу
         width_var.trace_add("write", lambda n, i, m, e=entry_height: self.root.focus_get() != e and sync_from_width())
         height_var.trace_add("write", lambda n, i, m, e=entry_width: self.root.focus_get() != e and sync_from_height())
-        
-        ttk.Label(config_window, text="Ширина (мм):").grid(row=0, column=0, sticky="w", padx=5, pady=5)
-        entry_width.grid(row=0, column=1, sticky="ew", padx=5, pady=5)
-        ttk.Label(config_window, text="Висота (мм):").grid(row=1, column=0, sticky="w", padx=5, pady=5)
-        entry_height.grid(row=1, column=1, sticky="ew", padx=5, pady=5)
-        ttk.Label(config_window, text="Кількість для друку:").grid(row=2, column=0, sticky="w", padx=5, pady=5)
-        ttk.Entry(config_window, textvariable=count_var).grid(row=2, column=1, sticky="ew", padx=5, pady=5)
+
+        ttk.Label(config_window, text="Ширина (мм):").grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        entry_width.grid(row=1, column=1, sticky="ew", padx=5, pady=5)
+        ttk.Label(config_window, text="Висота (мм):").grid(row=2, column=0, sticky="w", padx=5, pady=5)
+        entry_height.grid(row=2, column=1, sticky="ew", padx=5, pady=5)
+        ttk.Label(config_window, text="Кількість для друку:").grid(row=3, column=0, sticky="w", padx=5, pady=5)
+        ttk.Entry(config_window, textvariable=count_var).grid(row=3, column=1, sticky="ew", padx=5, pady=5)
 
         def save_config():
             try:
@@ -199,7 +242,7 @@ class LabelApp:
                 self.update_listbox()
                 config_window.destroy()
             except ValueError: messagebox.showerror("Помилка вводу", "Введіть дійсні числа.")
-        ttk.Button(config_window, text="Зберегти", command=save_config).grid(row=3, column=0, columnspan=2, pady=10)
+        ttk.Button(config_window, text="Зберегти", command=save_config).grid(row=4, column=0, columnspan=2, pady=10)
 
     def generate_pdf(self):
         if not self.labels:
